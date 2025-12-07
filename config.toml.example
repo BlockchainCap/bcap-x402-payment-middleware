@@ -1,0 +1,11 @@
+# URL of the Ethereum node to relay requests to
+node_url = "http://localhost:8545"
+
+# Price per RPC request in USDC
+price_per_request = 0.001
+
+# Port to bind the server to
+port = 3000
+
+# x402 facilitator URL
+facilitator_url = "https://x402.org/facilitator/"
