@@ -1,0 +1,22 @@
+[package]
+name = "payment-gateway"
+version = {workspace = true}
+edition = {workspace = true}
+
+[[bin]]
+name = "payment-gateway"
+path = "src/main.rs"
+
+[dependencies]
+axum = {workspace = true}
+tokio = {workspace = true}
+x402-rs = {workspace = true}
+x402-axum = {workspace = true}
+reqwest = {workspace = true}
+dotenvy = {workspace = true}
+serde = {workspace = true}
+toml = {workspace = true}
+tracing = {workspace = true}
+tracing-subscriber = {workspace = true}
+thiserror = {workspace = true}
+
