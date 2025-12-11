@@ -1,6 +1,7 @@
 use std::task::{self};
 
 use alloy::transports::TransportErrorKind;
+use alloy::signers::{Signer, local::PrivateKeySigner};
 use tower::Service;
 use tracing::{debug_span, Instrument};
 
@@ -12,11 +13,12 @@ use reqwest_middleware::ClientWithMiddleware;
 pub struct PaymentTransport {
     client: ClientWithMiddleware,
     url: reqwest::Url,
+    signer: PrivateKeySigner,
 }
 
 impl PaymentTransport {
-    pub fn new(client: ClientWithMiddleware, url: reqwest::Url) -> Self {
-        Self { client, url }
+    pub fn new(client: ClientWithMiddleware, url: reqwest::Url, signer: PrivateKeySigner) -> Self {
+        Self { client, url, signer }
     }
 }
 
@@ -41,12 +43,43 @@ impl Service<RequestPacket> for PaymentTransport {
 
 impl PaymentTransport {
     async fn do_reqwest(self, req: RequestPacket) -> TransportResult<ResponsePacket> {
+        // Serialize request body
+        let body = serde_json::to_string(&req).unwrap();
+        let body_bytes = body.as_bytes();
+        
+        // Generate authentication headers
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        
+        let address = self.signer.address();
+        
+        // Sign: address + timestamp + keccak256(body)
+        let body_hash = alloy::primitives::keccak256(body_bytes);
+        let message = format!("{}{}{}", address, timestamp, hex::encode(body_hash));
+        let message_hash = alloy::primitives::keccak256(message.as_bytes());
+        
+        let signature = self.signer
+            .sign_hash(&message_hash)
+            .await
+            .map_err(|e| TransportErrorKind::custom(e))?;
+
+        tracing::debug!(
+            address = %address,
+            timestamp = timestamp,
+            "Authenticated request"
+        );
+
         // x402 middleware lives *inside* self.client. By the time this returns,
         // any 402 -> pay -> retry dance should already be handled.
         let resp = self
             .client
             .post(self.url.clone())
-            .body(serde_json::to_string(&req).unwrap())
+            .header("X-Auth-Address", address.to_string())
+            .header("X-Auth-Signature", signature.to_string())
+            .header("X-Auth-Timestamp", timestamp.to_string())
+            .body(body)
             .send()
             .await
             .map_err(TransportErrorKind::custom)?;

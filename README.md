@@ -35,16 +35,17 @@ cargo run -p payment-gateway
 use x402_transport::PaymentTransport;
 use x402_reqwest::ClientExt;
 use alloy::providers::ProviderBuilder;
+use alloy::providers::Provider;
 
-let signer: PrivateKeySigner = "0x...".parse().unwrap();
-let client = Client::new()
-                .with_payments(signer)
-                .build();
-let transport = PaymentTransport::new(client, "http://localhost:3000/paid-relay".parse().unwrap());
-let provider = ProviderBuilder::new()
-                .connect_with(&transport)
-                .await
-                .unwrap();
+let signer: PrivateKeySigner =
+        "0x...".parse().unwrap();
+    
+let reqwest_client_builder = Client::new()
+    .with_payments(signer.clone())
+    .build();
+
+let transport = PaymentTransport::new(reqwest_client_builder, "<RPC_URL/relay>".parse().unwrap(), signer);
+let provider = ProviderBuilder::new().connect_with(&transport).await.unwrap();
 
 let chain_id = provider.get_chain_id().await?;
 ```

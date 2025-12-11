@@ -26,6 +26,7 @@ struct TomlConfig {
     price_per_request: f64,
     port: u16,
     facilitator_url: String,
+    database_path: String,
 }
 
 /// Complete application configuration
@@ -45,6 +46,9 @@ pub struct Config {
 
     /// EVM address to receive payments
     pub payment_address: String,
+
+    /// Path to RocksDB database
+    pub database_path: String,
 }
 
 impl Config {
@@ -86,6 +90,7 @@ impl Config {
             port: toml_config.port,
             facilitator_url: toml_config.facilitator_url,
             payment_address,
+            database_path: toml_config.database_path,
         })
     }
 
