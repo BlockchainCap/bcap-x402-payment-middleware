@@ -8,7 +8,7 @@ price_per_request = 0.001
 port = 3000
 
 # x402 facilitator URL
-facilitator_url = "http://localhost:8080"
+facilitator_url = "https://x402.org/facilitator"
 
 # Path to RocksDB database for user balances
 database_path = "./data/gateway.db"
