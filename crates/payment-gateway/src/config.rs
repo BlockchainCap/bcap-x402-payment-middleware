@@ -27,6 +27,8 @@ struct TomlConfig {
     port: u16,
     facilitator_url: String,
     database_path: String,
+    database_type: String,
+    dynamodb_table_name: Option<String>,
 }
 
 /// Complete application configuration
@@ -49,6 +51,12 @@ pub struct Config {
 
     /// Path to RocksDB database
     pub database_path: String,
+
+    /// Database type: "rocksdb" or "dynamodb"
+    pub database_type: String,
+
+    /// DynamoDB table name (required if database_type is "dynamodb")
+    pub dynamodb_table_name: Option<String>,
 }
 
 impl Config {
@@ -84,6 +92,20 @@ impl Config {
             ));
         }
 
+        // Validate database type
+        if toml_config.database_type != "rocksdb" && toml_config.database_type != "dynamodb" {
+            return Err(ConfigError::Invalid(
+                "database_type must be either 'rocksdb' or 'dynamodb'".to_string(),
+            ));
+        }
+
+        // Validate DynamoDB table name if using DynamoDB
+        if toml_config.database_type == "dynamodb" && toml_config.dynamodb_table_name.is_none() {
+            return Err(ConfigError::Invalid(
+                "dynamodb_table_name is required when database_type is 'dynamodb'".to_string(),
+            ));
+        }
+
         Ok(Config {
             node_url: toml_config.node_url,
             price_per_request: toml_config.price_per_request,
@@ -91,6 +113,8 @@ impl Config {
             facilitator_url: toml_config.facilitator_url,
             payment_address,
             database_path: toml_config.database_path,
+            database_type: toml_config.database_type,
+            dynamodb_table_name: toml_config.dynamodb_table_name,
         })
     }
 

@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::database::Database;
+use crate::database::DatabaseTrait;
 use crate::signature_cache::SignatureCache;
 use reqwest::Client;
 use std::sync::{Arc, Mutex};
@@ -15,8 +15,8 @@ pub struct AppState {
     /// Application configuration
     pub config: Config,
 
-    /// RocksDB database for persistent user balances
-    pub database: Arc<Database>,
+    /// Database for persistent user balances (trait object for flexibility)
+    pub database: Arc<dyn DatabaseTrait>,
 
     /// In-memory signature cache for replay attack prevention
     pub signature_cache: Arc<Mutex<SignatureCache>>,
@@ -27,7 +27,7 @@ pub struct AppState {
 
 impl AppState {
     /// Create new application state with configured HTTP client and database
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config, database: Arc<dyn DatabaseTrait>) -> Self {
         // Configure HTTP client with reasonable defaults for RPC relay
         let client = Client::builder()
             // Connection timeout for establishing connection to node
@@ -39,10 +39,6 @@ impl AppState {
             .build()
             .expect("Failed to build HTTP client");
 
-        // Open RocksDB database
-        let database = Database::open(&config.database_path)
-            .expect("Failed to open database");
-
         // Initialize signature cache
         let signature_cache = SignatureCache::new();
 
@@ -53,7 +49,7 @@ impl AppState {
         Self {
             client,
             config,
-            database: Arc::new(database),
+            database,
             signature_cache: Arc::new(Mutex::new(signature_cache)),
             facilitator: Arc::new(facilitator),
         }

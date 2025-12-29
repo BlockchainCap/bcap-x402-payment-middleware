@@ -226,7 +226,7 @@ pub async fn relay(
     // Check user balance
     let price = state.config.price_per_request;
     
-    match state.database.deduct_balance(&address, price, timestamp) {
+    match state.database.deduct_balance(&address, price, timestamp).await {
         Ok(remaining_balance) => {
             // Add signature to cache to prevent replay
             {
@@ -349,7 +349,7 @@ async fn handle_payment_with_paygate(
             );
 
             // Add balance to user account
-            match state.database.add_balance(&user_address, amount_usdc) {
+            match state.database.add_balance(&user_address, amount_usdc).await {
                 Ok(new_balance) => {
                     tracing::info!(
                         address = %user_address,
@@ -364,7 +364,7 @@ async fn handle_payment_with_paygate(
                         .unwrap()
                         .as_secs();
 
-                    if let Err(e) = state.database.deduct_balance(&user_address, price, timestamp) {
+                    if let Err(e) = state.database.deduct_balance(&user_address, price, timestamp).await {
                         tracing::error!(
                             address = %user_address,
                             error = %e,

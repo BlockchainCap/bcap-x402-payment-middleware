@@ -35,8 +35,31 @@ async fn main() {
         "Configuration loaded"
     );
 
-    // Create application state (opens database)
-    let state = Arc::new(AppState::new(config.clone()));
+    // Initialize database based on configuration
+    let database: Arc<dyn database::DatabaseTrait> = match config.database_type.as_str() {
+        "rocksdb" => {
+            let db = database::rocksdb::RocksDbDatabase::open(&config.database_path)
+                .expect("Failed to open RocksDB database");
+            Arc::new(db)
+        }
+        "dynamodb" => {
+            let table_name = config.dynamodb_table_name.clone()
+                .expect("DynamoDB table name is required");
+            let db = database::dynamodb::DynamoDbDatabase::new(table_name)
+                .await
+                .expect("Failed to initialize DynamoDB database");
+            Arc::new(db)
+        }
+        _ => panic!("Invalid database type: {}", config.database_type),
+    };
+
+    tracing::info!(
+        database_type = %config.database_type,
+        "Database initialized"
+    );
+
+    // Create application state
+    let state = Arc::new(AppState::new(config.clone(), database));
 
     tracing::info!(
         facilitator = %config.facilitator_url,
