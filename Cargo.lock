@@ -4512,8 +4512,6 @@ name = "payment-gateway"
 version = "0.1.0"
 dependencies = [
  "alloy",
- "alloy-json-rpc",
- "alloy-transport",
  "async-trait",
  "aws-config",
  "aws-sdk-dynamodb",
@@ -4523,7 +4521,6 @@ dependencies = [
  "hex",
  "once_cell",
  "reqwest",
- "reqwest-middleware",
  "rocksdb",
  "serde",
  "serde_json",
@@ -4531,11 +4528,9 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "toml 0.8.23",
- "tower",
  "tracing",
  "tracing-subscriber",
  "x402-axum",
- "x402-reqwest",
  "x402-rs",
 ]
 
