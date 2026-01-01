@@ -4531,7 +4531,25 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "x402-axum",
- "x402-rs",
+ "x402-rs 0.10.0",
+]
+
+[[package]]
+name = "payment-transport"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "alloy-json-rpc",
+ "alloy-transport",
+ "hex",
+ "reqwest",
+ "reqwest-middleware",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "x402-reqwest",
 ]
 
 [[package]]
@@ -9747,8 +9765,6 @@ dependencies = [
 [[package]]
 name = "x402-axum"
 version = "0.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed6dc5e0ffa1a47c6a013da7c94cfbe82f1f71182130bca3305f57c66140ecf9"
 dependencies = [
  "axum-core",
  "http 1.4.0",
@@ -9760,14 +9776,14 @@ dependencies = [
  "tower",
  "tracing",
  "url",
- "x402-rs",
+ "x402-rs 0.10.0",
 ]
 
 [[package]]
 name = "x402-reqwest"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7298a2a3fd4ae5f59f0de7c09ffdc869cf7f31b29478d5daa2c2bd34d66532c3"
+checksum = "c601599559e29c68ce99687502339fdbc5340c1db0a089697dfd4ad14fb13bc3"
 dependencies = [
  "alloy",
  "async-trait",
@@ -9785,14 +9801,12 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tracing",
- "x402-rs",
+ "x402-rs 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "x402-rs"
-version = "0.9.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5da32ef9625883be2175f8bc194fcf3e84712dc2f54e8de78fd015a02b02ed3d"
+version = "0.10.0"
 dependencies = [
  "alloy",
  "async-trait",
@@ -9828,21 +9842,42 @@ dependencies = [
 ]
 
 [[package]]
-name = "x402-transport"
-version = "0.1.0"
+name = "x402-rs"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a00a3a4135078e6ca03f0b37d764dc9a7c1b1ed2b6ca9389a5bb78e891d9ab5"
 dependencies = [
  "alloy",
- "alloy-json-rpc",
- "alloy-transport",
- "hex",
- "reqwest",
- "reqwest-middleware",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "bincode",
+ "dashmap 6.1.0",
+ "dotenvy",
+ "once_cell",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry-stdout",
+ "opentelemetry_sdk",
+ "regex",
+ "rust_decimal",
+ "serde",
  "serde_json",
+ "solana-client",
+ "solana-commitment-config",
+ "solana-sdk",
+ "spl-token",
+ "spl-token-2022 9.0.0",
+ "thiserror 2.0.17",
  "tokio",
- "tower",
+ "tokio-util",
+ "tower-http",
  "tracing",
+ "tracing-core",
+ "tracing-opentelemetry",
  "tracing-subscriber",
- "x402-reqwest",
+ "url",
 ]
 
 [[package]]

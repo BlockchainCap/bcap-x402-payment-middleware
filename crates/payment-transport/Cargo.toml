@@ -1,5 +1,5 @@
 [package]
-name = "x402-transport"
+name = "payment-transport"
 version = "0.1.0"
 edition = "2021"
 

@@ -32,7 +32,7 @@ Client → [x402 Gateway + Balance Tracking] → EVM Node
 ### Crates
 
 - **`payment-gateway`** — Axum-based service with balance tracking, signature authentication, and x402 settlement
-- **`x402-transport`** — Alloy-compatible HTTP transport that automatically signs requests and handles payments
+- **`payment-transport`** — Alloy-compatible HTTP transport that automatically signs requests and handles payments
 
 ## Quick Start
 
