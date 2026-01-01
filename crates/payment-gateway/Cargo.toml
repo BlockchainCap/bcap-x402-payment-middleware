@@ -18,7 +18,7 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 thiserror = "2"
 axum = "0.8"
-x402-rs = { path = "../../../x402-rs" }
+x402-rs = { path = "../../../x402-rs" } # todo: remove after x402-rs is fixed post V2
 x402-axum = { path = "../../../x402-rs/crates/x402-axum", features = ["telemetry"] }
 dotenvy = "0.15"
 rocksdb = "0.24"
