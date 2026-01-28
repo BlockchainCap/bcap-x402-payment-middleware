@@ -17,9 +17,9 @@ alloy = "1.1.3"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 thiserror = "2"
-axum = "0.8"
-x402-rs = { path = "../../../x402-rs" } # todo: remove after x402-rs is fixed post V2
-x402-axum = { path = "../../../x402-rs/crates/x402-axum", features = ["telemetry"] }
+axum = { version = "0.8", features = ["macros"] }
+x402-rs = { version = "0.12.5" }
+x402-axum = { version = "0.8.0", features = ["telemetry"] }
 dotenvy = "0.15"
 rocksdb = "0.24"
 bincode = "1.3"

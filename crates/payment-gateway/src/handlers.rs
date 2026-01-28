@@ -1,17 +1,15 @@
 use axum::{
     body::Bytes,
-    extract::State,
-    http::{header, HeaderMap, StatusCode},
+    extract::{Request, State},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use std::str::FromStr;
+use std::{io::{Error, ErrorKind}, str::FromStr};
 use std::sync::Arc;
 use tracing::instrument;
-use serde_json::json;
 use alloy::primitives::{Address, Signature};
-use x402_axum::layer::X402Paygate;
-use x402_rs::types::{EvmAddress, MixedAddress, PaymentRequiredResponse, PaymentRequirements, Scheme, TokenAmount, X402Version};
-use x402_rs::network::Network;
+use x402_axum::{PaygateProtocol, paygate::{Paygate, PaygateError, ResourceInfoBuilder, VerificationError}};
+use x402_rs::{chain::ChainId, proto::{self, v2::{self, PaymentRequirements}}, scheme::v2_eip155_exact::ExactScheme, util::Base64Bytes};
 use once_cell::sync::Lazy;
 
 use crate::state::AppState;
@@ -37,33 +35,24 @@ fn extract_auth_headers(headers: &HeaderMap) -> Option<(String, String, u64)> {
     Some((address, signature, timestamp))
 }
 
-/// Check if request has an X-Payment header (indicates payment attempt)
-fn has_payment_header(headers: &HeaderMap) -> bool {
-    headers.contains_key("X-Payment")
-}
-
 /// Create payment requirements for top-up
-fn create_payment_requirements(state: &AppState) -> Vec<PaymentRequirements> {
+fn create_payment_requirements(state: &AppState) -> v2::PriceTag {
     let amount_smallest_unit = (TOPUP_AMOUNT_USDC * 1_000_000.0) as u64;
-    
-    vec![PaymentRequirements {
-        scheme: Scheme::Exact,
-        network: Network::BaseSepolia,
-        max_amount_required: TokenAmount::from(amount_smallest_unit),
-        resource: format!("http://localhost:{}/relay", state.config.port)
-            .parse()
-            .unwrap(),
-        description: "Top up your RPC access balance with $1 USDC".to_string(),
-        mime_type: "application/json".to_string(),
-        pay_to: MixedAddress::Evm(EvmAddress::from_str(&state.config.payment_address).unwrap()),
+
+    let requirements: PaymentRequirements = PaymentRequirements {
+        scheme: ExactScheme.to_string(),
+        network: ChainId::new("eip155", "11155111"),
+        amount: amount_smallest_unit.to_string(),
+        pay_to: state.config.payment_address.clone(),
+        asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e".to_string(),
         max_timeout_seconds: 300,
-        asset: MixedAddress::Evm(EvmAddress::from_str("0x036CbD53842c5426634e7929541eC2318f3dCF7e").unwrap()),
-        extra: Some(json!({
-            "name": "USDC",
-            "version": "2"
-        })),
-        output_schema: None,
-    }]
+        extra: None,
+    };
+
+    v2::PriceTag{
+        requirements,
+        enricher: None,
+    }
 }
 
 /// Verify cryptographic signature and timestamp
@@ -107,21 +96,6 @@ fn verify_signature(
     }
 
     Ok(())
-}
-
-/// Return 402 Payment Required with x402 payment requirements
-fn request_payment(state: &AppState) -> Response {
-    let payment_required_response = PaymentRequiredResponse {
-        error: ERR_PAYMENT_HEADER_REQUIRED.clone(),
-        accepts: create_payment_requirements(state),
-        x402_version: X402Version::V1,
-    };
-
-    (
-        StatusCode::PAYMENT_REQUIRED,
-        [(header::CONTENT_TYPE, "application/json")],
-        serde_json::to_string(&payment_required_response).unwrap(),
-    ).into_response()
 }
 
 /// Forward request to RPC node
@@ -171,44 +145,62 @@ async fn relay_to_node(state: &AppState, body: Bytes) -> Response {
     ).into_response()
 }
 
+fn request_payment(state: &AppState, req: &Request) -> Response {
+    // Create payment requirements for top-up
+    let price_tag = create_payment_requirements(state);
+
+    // Create X402Paygate to verify and settle payment
+    let paygate = Paygate {
+        facilitator: state.facilitator.clone(),
+        accepts: Arc::new(vec![price_tag]),
+        settle_before_execution: true,
+        resource: ResourceInfoBuilder::default().as_resource_info(None, req),
+    };
+
+    return v2::PriceTag::error_into_response(
+        PaygateError::Verification(VerificationError::PaymentHeaderRequired(v2::PriceTag::PAYMENT_HEADER_NAME)), 
+            &paygate.accepts, 
+            &paygate.resource
+        );
+}
+
 /// Main relay endpoint - handles both payments and authenticated requests
-#[instrument(skip_all, fields(body_size))]
 pub async fn relay(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    tracing::Span::current().record("body_size", body.len());
+    request: Request,
+) -> impl IntoResponse {
+    tracing::Span::current().record("request_uri", request.uri().to_string());
 
     // Check if this is a payment/top-up request (has X-Payment header)
-    if has_payment_header(&headers) {
-        return handle_payment_with_paygate(state, headers, body).await;
+    if extract_payment_header(&request.headers(), v2::PriceTag::PAYMENT_HEADER_NAME).is_some() {
+        let payment_header_value = process_payment(state.clone(), &request).await.unwrap();
+        let body = extract_body(request).await.unwrap();
+
+        let mut res = relay_to_node(&state, body).await;
+
+        res.headers_mut().insert("X-Payment-Response", payment_header_value);
+        return res.into_response();
     }
 
+    let payment_required_response = request_payment(&state, &request);
+
     // Not a payment - check for authentication headers
-    let (address, signature, timestamp) = match extract_auth_headers(&headers) {
+    let (address, signature, timestamp) = match extract_auth_headers(&request.headers()) {
         Some(auth) => auth,
         None => {
             tracing::debug!("No authentication headers found");
-            return request_payment(&state);
+            return payment_required_response
         }
     };
 
-    // Check if signature has been used before (replay attack)
-    {
-        let mut cache = state.signature_cache.lock().unwrap();
-        if cache.is_replay(&signature) {
-            tracing::warn!(
-                address = %address,
-                signature = %signature,
-                "Replay detected"
-            );
-            return (
-                StatusCode::UNAUTHORIZED,
-                "Replay detected: signature already used",
-            ).into_response();
-        }
-    }
+    let (_, body) = request.into_parts();
+
+    let body: Bytes = match axum::body::to_bytes(body, 1024 * 1024).await {  // 1MB limit                                                                          
+        Ok(b) => b,                                                                                                                                                
+        Err(_) => {                                                                                                                                                
+            return (StatusCode::BAD_REQUEST, "Failed to read body").into_response();                                                                               
+        }                                                                                                                                                          
+    };
 
     // Verify signature
     if let Err(e) = verify_signature(&address, &signature, timestamp, &body) {
@@ -251,151 +243,86 @@ pub async fn relay(
                 required = price,
                 "Insufficient balance or database error"
             );
-            request_payment(&state)
+            return payment_required_response
         }
     }
 }
 
+async fn extract_body(request: Request) -> Result<Bytes, Error> {
+    let (_, body) = request.into_parts();
+    match axum::body::to_bytes(body, 1024 * 1024).await {  // 1MB limit                                                                          
+        Ok(b) => Ok(b),                                                                                                                                                
+        Err(_) => {                                                                                                                                                
+            return Err(Error::new(ErrorKind::Other, "Failed to read body"));                                                                               
+        }                                                                                                                                                          
+    }
+}
+
 /// Handle payment/deposit request using X402Paygate
-async fn handle_payment_with_paygate(
+async fn process_payment(
     state: Arc<AppState>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
+    req: &Request
+) -> Result<HeaderValue, PaygateError> {
     // Create payment requirements for top-up
-    let payment_requirements = create_payment_requirements(&state);
-    
+    let price_tag = create_payment_requirements(&state);
+
     // Create X402Paygate to verify and settle payment
-    let paygate = X402Paygate {
+    let paygate = Paygate {
         facilitator: state.facilitator.clone(),
-        payment_requirements: Arc::new(payment_requirements),
-        settle_before_execution: false, // Settle after we add balance
+        accepts: Arc::new(vec![price_tag]),
+        settle_before_execution: true,
+        resource: ResourceInfoBuilder::default().as_resource_info(None, req),
     };
 
-    // Extract and verify payment
-    let payment_payload = match paygate.extract_payment_payload(&headers).await {
-        Ok(payload) => payload,
-        Err(err) => {
-            tracing::warn!("Payment extraction failed");
-            return err.into_response();
-        }
-    };
+    // Extract payment payload from headers
+    let header = extract_payment_header(req.headers(), v2::PriceTag::PAYMENT_HEADER_NAME).ok_or(
+        VerificationError::PaymentHeaderRequired(v2::PriceTag::PAYMENT_HEADER_NAME),
+    )?;
+    let payment_payload = extract_payment_payload::<v2::PaymentPayload<v2::PaymentRequirements, serde_json::Value>>(header)
+        .ok_or(VerificationError::InvalidPaymentHeader)?;
 
-    // Verify payment with facilitator
-    let verify_request = match paygate.verify_payment(payment_payload).await {
-        Ok(request) => request,
-        Err(err) => {
-            tracing::warn!("Payment verification failed");
-            return err.into_response();
-        }
-    };
+    let verify_request =
+        v2::PriceTag::make_verify_request(payment_payload, &paygate.accepts, &paygate.resource)?;
 
-    // Extract user address and amount from verified payment
-    // Convert PaymentPayload to JSON to extract fields
-    let payment_json = match serde_json::to_value(&verify_request.payment_payload) {
-        Ok(json) => json,
-        Err(e) => {
-            tracing::error!("Failed to serialize payment payload: {}", e);
-            return (
-                StatusCode::BAD_REQUEST,
-                "Invalid payment format",
-            ).into_response();
-        }
-    };
-    
-    // Extract from address - the payment payload should have an EVM authorization
-    let user_address = payment_json
-        .get("payload")
-        .and_then(|p| p.get("authorization"))
-        .and_then(|auth| auth.get("from"))
-        .and_then(|from| from.as_str())
-        .map(|s| s.to_string())
-        .unwrap_or_default();
+    let verify_response = paygate.verify_payment(&verify_request).await?;
 
-    if user_address.is_empty() {
-        tracing::error!("Failed to extract user address from payment");
-        return (
-            StatusCode::BAD_REQUEST,
-            "Invalid payment format",
-        ).into_response();
-    }
+    v2::PriceTag::validate_verify_response(verify_response)?;
 
-    // Extract amount
-    let amount_raw = payment_json
-        .get("payload")
-        .and_then(|p| p.get("authorization"))
-        .and_then(|auth| auth.get("value"))
-        .and_then(|val| val.as_str())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| "0".to_string());
+    let settlement = paygate.settle_payment(&verify_request).await?;
 
-    // Convert from string to u64 to f64 USDC (6 decimals)
-    let amount_usdc = amount_raw.parse::<u64>()
-        .map(|v| v as f64 / 1_000_000.0)
-        .unwrap_or(0.0);
+    let header_value = settlement_to_header(settlement)?;
 
-    tracing::info!(
-        address = %user_address,
-        amount = amount_usdc,
-        "Payment verified, settling and adding to balance"
-    );
 
-    // Settle payment on-chain
-    match paygate.settle_payment(&verify_request).await {
-        Ok(_settlement) => {
-            tracing::info!(
-                address = %user_address,
-                "Payment settled successfully"
-            );
-
-            // Add balance to user account
-            match state.database.add_balance(&user_address, amount_usdc).await {
-                Ok(new_balance) => {
-                    tracing::info!(
-                        address = %user_address,
-                        new_balance = new_balance,
-                        "Balance updated successfully"
-                    );
-
-                    // Deduct the price for this request
-                    let price = state.config.price_per_request;
-                    let timestamp = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs();
-
-                    if let Err(e) = state.database.deduct_balance(&user_address, price, timestamp).await {
-                        tracing::error!(
-                            address = %user_address,
-                            error = %e,
-                            "Failed to deduct balance after deposit"
-                        );
-                    }
-
-                    // Process the original request
-                    relay_to_node(&state, body).await
-                }
-                Err(e) => {
-                    tracing::error!(
-                        address = %user_address,
-                        error = %e,
-                        "Failed to add balance"
-                    );
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Failed to process payment: {}", e),
-                    ).into_response()
-                }
-            }
-        }
-        Err(err) => {
-            tracing::error!("Payment settlement failed");
-            err.into_response()
-        }
-    }
+    Ok(header_value)
 }
 
 /// Health check endpoint (not paywalled)
 pub async fn health() -> &'static str {
     "OK"
+}
+
+/// Converts a [`proto::SettleResponse`] into an HTTP header value.
+///
+/// Returns an error response if conversion fails.
+fn settlement_to_header(settlement: proto::SettleResponse) -> Result<HeaderValue, PaygateError> {
+    let json =
+        serde_json::to_vec(&settlement).map_err(|err| PaygateError::Settlement(err.to_string()))?;
+    let payment_header = Base64Bytes::encode(json);
+    HeaderValue::from_bytes(payment_header.as_ref())
+        .map_err(|err| PaygateError::Settlement(err.to_string()))
+}
+
+/// Extracts and deserializes the payment payload from base64-encoded header bytes.
+fn extract_payment_payload<T>(header_bytes: &[u8]) -> Option<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let base64 = Base64Bytes::from(header_bytes).decode().ok()?;
+    let value = serde_json::from_slice(base64.as_ref()).ok()?;
+    Some(value)
+}
+
+/// Extracts the payment header value from the header map.
+fn extract_payment_header<'a>(header_map: &'a HeaderMap, header_name: &'a str) -> Option<&'a [u8]> {
+    header_map.get(header_name).map(|h| h.as_bytes())
 }
