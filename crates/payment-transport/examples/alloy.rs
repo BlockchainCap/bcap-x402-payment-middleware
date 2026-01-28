@@ -4,9 +4,12 @@ use tracing_subscriber::EnvFilter;
 use payment_transport::PaymentTransport;
 use alloy::{signers::local::PrivateKeySigner};
 use alloy::providers::{ProviderBuilder, Provider};
+use dotenvy::dotenv;
 
 #[tokio::main]
 async fn main() {
+    dotenv().expect("Failed to load .env file");
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
@@ -21,6 +24,8 @@ async fn main() {
         .expect("NODE_URL env variable required")
         .parse()
         .unwrap();
+
+    println!("Using node URL: {}", url);
 
     // Create a custom transport layer that embeds the micropayments middleware
     let transport = PaymentTransport::new(url, signer);
