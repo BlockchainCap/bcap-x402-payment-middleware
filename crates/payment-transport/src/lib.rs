@@ -1,13 +1,17 @@
+use std::sync::Arc;
 use std::task::{self};
 
 use alloy::transports::TransportErrorKind;
 use alloy::signers::{Signer, local::PrivateKeySigner};
 use tower::Service;
 use tracing::{debug_span, Instrument};
+use reqwest::Client;
 
 use alloy_transport::{BoxTransport, Transport, TransportConnect, TransportError, TransportFut, TransportResult};
 use alloy_json_rpc::{RequestPacket, ResponsePacket};
 use reqwest_middleware::ClientWithMiddleware;
+use x402_reqwest::{ReqwestWithPayments, ReqwestWithPaymentsBuild, X402Client};
+use x402_rs::scheme::v2_eip155_exact::client::V2Eip155ExactClient;
 
 #[derive(Clone)]
 pub struct PaymentTransport {
@@ -17,7 +21,18 @@ pub struct PaymentTransport {
 }
 
 impl PaymentTransport {
-    pub fn new(client: ClientWithMiddleware, url: reqwest::Url, signer: PrivateKeySigner) -> Self {
+    pub fn new(url: reqwest::Url, signer: PrivateKeySigner) -> Self {
+        let mut x402_client = X402Client::new();
+        
+        {
+            println!("Using EVM signer address: {:?}", signer.clone().address());
+            let signer = Arc::new(signer.clone());
+            x402_client = x402_client
+                .register(V2Eip155ExactClient::new(signer.clone()));
+            println!("Enabled eip155 exact scheme")
+        };
+
+        let client = Client::new().with_payments(x402_client).build();
         Self { client, url, signer }
     }
 }

@@ -24,44 +24,23 @@ async fn main() {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    // testing signer
-    // let signer: PrivateKeySigner = env::var("PRIVATE_KEY").expect("PRIVATE_KEY env required").parse().unwrap();
-
-    let mut x402_client = X402Client::new();
+    // Create a signer that will be credited for API requests
     let signer: PrivateKeySigner = env::var("PRIVATE_KEY")
-            .expect("PRIVATE_KEY env variable required")
-            .parse()
-            .unwrap();
-    
-    // Register eip155 "exact" scheme
-    {
-        println!("Using EVM signer address: {:?}", signer.clone().address());
-        let signer = Arc::new(signer.clone());
-        x402_client = x402_client
-            .register(V2Eip155ExactClient::new(signer.clone()));
-        println!("Enabled eip155 exact scheme")
-    };
+        .expect("PRIVATE_KEY env variable required")
+        .parse()
+        .unwrap();
 
-    let client = Client::new().with_payments(x402_client).build();
-    let transport = PaymentTransport::new(client, "http://localhost:3000/relay".parse().unwrap(), signer);
+    // Create a custom transport layer that embeds the micropayments middleware
+    let transport = PaymentTransport::new("http://localhost:3000/relay".parse().unwrap(), signer);
+
+    // Create an EVM provider normally, include the transport layer
     let provider = ProviderBuilder::new().connect_with(&transport).await.unwrap();
 
-    // let provider = ProviderBuilder::new().connect_http("https://ethereum-rpc.publicnode.com".parse().unwrap());
-    // Average duration with payment: 0.14583168316831682s
-    let mut average_duration: i32 = 0;
-    let iterations = 105;
-    for _i in 0..iterations {
-        // compute response time
-        let start = Instant::now();
-        info!("Getting balance. Start time: {:?}", start);
-        let response = provider.get_block_by_hash(BlockHash::from_str("0x26a6a51b13e7ea2af8008035af560f1d6f49fb00e8318a266d1f6bbec9ac7199").unwrap()).await.map_err(|e| {
-            eprintln!("provider error: {e:?}");
-            e
-        }).unwrap();
-        let end = Instant::now();
-        let duration = end.duration_since(start);
-        info!("Response time: {:?}. Transaction: {:?}", duration, response.unwrap().header);
-        average_duration = average_duration.saturating_add(duration.as_millis() as i32);
-    }
-    info!("Average duration: {:?}s", average_duration as f64 / iterations as f64 / 1000.0);
+    // Use the provider normally
+    let block_number = provider.get_block_number().await.map_err(|e| {
+        eprintln!("provider error: {e:?}");
+        e
+    }).unwrap();
+
+    println!("Current block number is {:?}", block_number);
 }
