@@ -59,26 +59,21 @@ The gateway will:
 ### Client Usage
 
 ```rust
-use x402_transport::PaymentTransport;
-use x402_reqwest::ClientExt;
-use alloy::providers::ProviderBuilder;
-use alloy::providers::Provider;
+use payment_transport::PaymentTransport;
+use alloy::providers::{Provider, ProviderBuilder};
 use alloy::signers::local::PrivateKeySigner;
 
 // Your signing key (same key pays and authenticates)
 let signer: PrivateKeySigner = "0x...".parse().unwrap();
-    
-// Create x402-enabled HTTP client
-let reqwest_client = Client::new()
-    .with_payments(signer.clone())
-    .build();
 
-// Create transport with signer for authentication
-let transport = PaymentTransport::new(
-    reqwest_client, 
-    "http://localhost:3000/relay".parse().unwrap(), 
-    signer
-);
+// Node URL
+let url = env::var("NODE_URL")
+        .expect("NODE_URL env variable required")
+        .parse()
+        .unwrap();
+
+// Create a custom transport layer that embeds the micropayments middleware
+let transport = PaymentTransport::new(url, signer);
 
 // Use with Alloy provider
 let provider = ProviderBuilder::new()
@@ -87,7 +82,7 @@ let provider = ProviderBuilder::new()
     .unwrap();
 
 // Make requests - automatically authenticated and paid
-let chain_id = provider.get_chain_id().await?;
+let block_number = provider.get_block_number().await?;
 ```
 
 ## Configuration
