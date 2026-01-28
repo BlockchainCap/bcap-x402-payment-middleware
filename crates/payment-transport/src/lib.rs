@@ -78,7 +78,7 @@ impl PaymentTransport {
         let signature = self.signer
             .sign_hash(&message_hash)
             .await
-            .map_err(|e| TransportErrorKind::custom(e))?;
+            .map_err(TransportErrorKind::custom)?;
 
         tracing::debug!(
             address = %address,

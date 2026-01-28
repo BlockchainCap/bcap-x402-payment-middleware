@@ -1,16 +1,14 @@
 use axum::{
     body::Bytes,
-    extract::{Request, State},
+    extract::State,
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use std::{io::{Error, ErrorKind}, str::FromStr};
+use std::str::FromStr;
 use std::sync::Arc;
-use tracing::instrument;
-use alloy::primitives::{Address, Signature, address};
-use x402_axum::{PaygateProtocol, paygate::{Paygate, PaygateError, ResourceInfoBuilder, VerificationError}};
-use x402_rs::{chain::ChainId, networks::{KnownNetworkEip155, USDC}, proto::{self, v2::{self, PaymentRequirements, ResourceInfo}}, scheme::v2_eip155_exact::{ExactScheme, V2Eip155Exact}, util::Base64Bytes};
-use once_cell::sync::Lazy;
+use alloy::primitives::{Address, Signature};
+use x402_axum::{PaygateProtocol, paygate::{Paygate, PaygateError, VerificationError}};
+use x402_rs::{networks::{KnownNetworkEip155, USDC}, proto::{self, v2::{self, ResourceInfo}}, scheme::v2_eip155_exact::V2Eip155Exact, util::Base64Bytes};
 
 use crate::errors::ApiError;
 use crate::state::AppState;
@@ -21,9 +19,6 @@ const TOPUP_AMOUNT_USDC: f64 = 1.0;
 /// Timestamp window in seconds - requests must be within this time
 const TIMESTAMP_WINDOW_SECS: u64 = 60;
 
-static ERR_PAYMENT_HEADER_REQUIRED: Lazy<String> =
-    Lazy::new(|| "X-PAYMENT header is required".to_string());
-    
 /// Extract authentication headers from request
 /// Returns (address, signature, timestamp) if all headers are present
 fn extract_auth_headers(headers: &HeaderMap) -> Option<(String, String, u64)> {
@@ -164,11 +159,11 @@ fn request_payment(state: &AppState) -> Response {
         },
     };
 
-    return v2::PriceTag::error_into_response(
+    v2::PriceTag::error_into_response(
         PaygateError::Verification(VerificationError::PaymentHeaderRequired(v2::PriceTag::PAYMENT_HEADER_NAME)), 
             &paygate.accepts, 
             &paygate.resource
-        );
+        )
 }
 
 /// Main relay endpoint - handles both payments and authenticated requests
@@ -192,6 +187,19 @@ pub async fn relay(
 
     tracing::debug!("Auth extracted. Address: {}, Signature: {}, Timestamp: {}", address, signature, timestamp);
 
+    // Check if signature is in cache
+    {
+        let mut cache = state.signature_cache.lock().unwrap();
+        if cache.is_replay(&signature) {
+            tracing::warn!(signature = %signature, "Signature replay detected");
+            return (
+                StatusCode::UNAUTHORIZED,
+                format!("Signature replay detected"),
+            ).into_response();
+        }
+        drop(cache);
+    }
+
     // Verify signature
     if let Err(e) = verify_signature(&address, &signature, timestamp, &body) {
         tracing::warn!(
@@ -214,6 +222,7 @@ pub async fn relay(
             {
                 let mut cache = state.signature_cache.lock().unwrap();
                 cache.add(&signature);
+                drop(cache);
             }
 
             tracing::info!(
@@ -246,7 +255,7 @@ pub async fn relay(
 
             tracing::info!("Returning payment required response");
 
-            return payment_required_response
+            payment_required_response
         }
     }
 }

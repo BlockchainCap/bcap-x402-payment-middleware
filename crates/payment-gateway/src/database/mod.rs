@@ -21,9 +21,6 @@ pub enum DatabaseError {
 
     #[error("Attribute not found: {0}")]
     AttributeNotFound(String),
-
-    #[error("Parse error: {0}")]
-    ParseError(String),
 }
 
 /// User account data stored in database

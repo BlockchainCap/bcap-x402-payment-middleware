@@ -1,22 +1,9 @@
 use std::env;
-use std::str::FromStr;
-use std::sync::Arc;
-use std::task::{self, Context, Poll};
 
-use alloy::primitives::Address;
-use reqwest::Client;
 use tracing_subscriber::EnvFilter;
-use x402_reqwest::{ReqwestWithPayments, ReqwestWithPaymentsBuild, X402Client};
 use payment_transport::PaymentTransport;
-use alloy::{signers::local::PrivateKeySigner, transports::TransportErrorKind};
-use alloy::providers::ProviderBuilder;
-use tower::Service;
-use tracing::{debug, info, debug_span, trace, Instrument};
-use alloy::providers::Provider;
-use tokio::time::Instant;
-use alloy::primitives::FixedBytes;
-use alloy::primitives::BlockHash;
-use x402_rs::scheme::v2_eip155_exact::client::V2Eip155ExactClient;
+use alloy::{signers::local::PrivateKeySigner};
+use alloy::providers::{ProviderBuilder, Provider};
 
 #[tokio::main]
 async fn main() {
