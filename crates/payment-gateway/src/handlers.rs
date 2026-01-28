@@ -7,11 +7,12 @@ use axum::{
 use std::{io::{Error, ErrorKind}, str::FromStr};
 use std::sync::Arc;
 use tracing::instrument;
-use alloy::primitives::{Address, Signature};
+use alloy::primitives::{Address, Signature, address};
 use x402_axum::{PaygateProtocol, paygate::{Paygate, PaygateError, ResourceInfoBuilder, VerificationError}};
-use x402_rs::{chain::ChainId, proto::{self, v2::{self, PaymentRequirements}}, scheme::v2_eip155_exact::ExactScheme, util::Base64Bytes};
+use x402_rs::{chain::ChainId, networks::{KnownNetworkEip155, USDC}, proto::{self, v2::{self, PaymentRequirements, ResourceInfo}}, scheme::v2_eip155_exact::{ExactScheme, V2Eip155Exact}, util::Base64Bytes};
 use once_cell::sync::Lazy;
 
+use crate::errors::ApiError;
 use crate::state::AppState;
 
 /// Top-up amount in USDC for prepayments
@@ -39,20 +40,20 @@ fn extract_auth_headers(headers: &HeaderMap) -> Option<(String, String, u64)> {
 fn create_payment_requirements(state: &AppState) -> v2::PriceTag {
     let amount_smallest_unit = (TOPUP_AMOUNT_USDC * 1_000_000.0) as u64;
 
-    let requirements: PaymentRequirements = PaymentRequirements {
-        scheme: ExactScheme.to_string(),
-        network: ChainId::new("eip155", "11155111"),
-        amount: amount_smallest_unit.to_string(),
-        pay_to: state.config.payment_address.clone(),
-        asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e".to_string(),
-        max_timeout_seconds: 300,
-        extra: None,
-    };
+    // let requirements: PaymentRequirements = PaymentRequirements {
+    //     scheme: ExactScheme.to_string(),
+    //     network: ChainId::new("eip155", "84532"),
+    //     amount: amount_smallest_unit.to_string(),
+    //     pay_to: state.config.payment_address.clone(),
+    //     asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e".to_string(),
+    //     max_timeout_seconds: 300,
+    //     extra: None,
+    // };
 
-    v2::PriceTag{
-        requirements,
-        enricher: None,
-    }
+    V2Eip155Exact::price_tag(
+        state.config.payment_address.parse::<Address>().unwrap(),
+        USDC::base_sepolia().amount(amount_smallest_unit),
+    )
 }
 
 /// Verify cryptographic signature and timestamp
@@ -145,7 +146,7 @@ async fn relay_to_node(state: &AppState, body: Bytes) -> Response {
     ).into_response()
 }
 
-fn request_payment(state: &AppState, req: &Request) -> Response {
+fn request_payment(state: &AppState) -> Response {
     // Create payment requirements for top-up
     let price_tag = create_payment_requirements(state);
 
@@ -154,7 +155,13 @@ fn request_payment(state: &AppState, req: &Request) -> Response {
         facilitator: state.facilitator.clone(),
         accepts: Arc::new(vec![price_tag]),
         settle_before_execution: true,
-        resource: ResourceInfoBuilder::default().as_resource_info(None, req),
+        resource: ResourceInfo {
+            description: "x402 node rpc".to_string(),
+            mime_type: "application/json".to_string(),
+            url: format!("http://localhost:{}/relay", state.config.port)
+                .parse()
+                .unwrap()
+        },
     };
 
     return v2::PriceTag::error_into_response(
@@ -167,40 +174,23 @@ fn request_payment(state: &AppState, req: &Request) -> Response {
 /// Main relay endpoint - handles both payments and authenticated requests
 pub async fn relay(
     State(state): State<Arc<AppState>>,
-    request: Request,
-) -> impl IntoResponse {
-    tracing::Span::current().record("request_uri", request.uri().to_string());
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    tracing::Span::current().record("body_size", body.len());
 
-    // Check if this is a payment/top-up request (has X-Payment header)
-    if extract_payment_header(&request.headers(), v2::PriceTag::PAYMENT_HEADER_NAME).is_some() {
-        let payment_header_value = process_payment(state.clone(), &request).await.unwrap();
-        let body = extract_body(request).await.unwrap();
+    let payment_required_response = request_payment(&state);
 
-        let mut res = relay_to_node(&state, body).await;
-
-        res.headers_mut().insert("X-Payment-Response", payment_header_value);
-        return res.into_response();
-    }
-
-    let payment_required_response = request_payment(&state, &request);
-
-    // Not a payment - check for authentication headers
-    let (address, signature, timestamp) = match extract_auth_headers(&request.headers()) {
+    // check for authentication headers
+    let (address, signature, timestamp) = match extract_auth_headers(&headers) {
         Some(auth) => auth,
         None => {
             tracing::debug!("No authentication headers found");
-            return payment_required_response
+            return ApiError::ApiHeadersMissing.into_response();
         }
     };
 
-    let (_, body) = request.into_parts();
-
-    let body: Bytes = match axum::body::to_bytes(body, 1024 * 1024).await {  // 1MB limit                                                                          
-        Ok(b) => b,                                                                                                                                                
-        Err(_) => {                                                                                                                                                
-            return (StatusCode::BAD_REQUEST, "Failed to read body").into_response();                                                                               
-        }                                                                                                                                                          
-    };
+    tracing::debug!("Auth extracted. Address: {}, Signature: {}, Timestamp: {}", address, signature, timestamp);
 
     // Verify signature
     if let Err(e) = verify_signature(&address, &signature, timestamp, &body) {
@@ -243,25 +233,28 @@ pub async fn relay(
                 required = price,
                 "Insufficient balance or database error"
             );
+            if extract_payment_header(&headers, v2::PriceTag::PAYMENT_HEADER_NAME).is_some() {
+                let payment_header_value = process_payment(state.clone(), &headers).await.unwrap();
+
+                state.database.add_balance(&address, TOPUP_AMOUNT_USDC).await.unwrap();
+        
+                let mut res = relay_to_node(&state, body).await;
+        
+                res.headers_mut().insert("X-Payment-Response", payment_header_value);
+                return res.into_response();
+            }
+
+            tracing::info!("Returning payment required response");
+
             return payment_required_response
         }
-    }
-}
-
-async fn extract_body(request: Request) -> Result<Bytes, Error> {
-    let (_, body) = request.into_parts();
-    match axum::body::to_bytes(body, 1024 * 1024).await {  // 1MB limit                                                                          
-        Ok(b) => Ok(b),                                                                                                                                                
-        Err(_) => {                                                                                                                                                
-            return Err(Error::new(ErrorKind::Other, "Failed to read body"));                                                                               
-        }                                                                                                                                                          
     }
 }
 
 /// Handle payment/deposit request using X402Paygate
 async fn process_payment(
     state: Arc<AppState>,
-    req: &Request
+    headers: &HeaderMap
 ) -> Result<HeaderValue, PaygateError> {
     // Create payment requirements for top-up
     let price_tag = create_payment_requirements(&state);
@@ -271,27 +264,37 @@ async fn process_payment(
         facilitator: state.facilitator.clone(),
         accepts: Arc::new(vec![price_tag]),
         settle_before_execution: true,
-        resource: ResourceInfoBuilder::default().as_resource_info(None, req),
+        resource: ResourceInfo {
+            description: "x402 node rpc".to_string(),
+            mime_type: "application/json".to_string(),
+            url: format!("http://localhost:{}/relay", state.config.port)
+                .parse()
+                .unwrap()
+        },
     };
 
     // Extract payment payload from headers
-    let header = extract_payment_header(req.headers(), v2::PriceTag::PAYMENT_HEADER_NAME).ok_or(
+    let header = extract_payment_header(headers, v2::PriceTag::PAYMENT_HEADER_NAME).ok_or(
         VerificationError::PaymentHeaderRequired(v2::PriceTag::PAYMENT_HEADER_NAME),
     )?;
+    
     let payment_payload = extract_payment_payload::<v2::PaymentPayload<v2::PaymentRequirements, serde_json::Value>>(header)
         .ok_or(VerificationError::InvalidPaymentHeader)?;
 
     let verify_request =
         v2::PriceTag::make_verify_request(payment_payload, &paygate.accepts, &paygate.resource)?;
 
+    tracing::debug!("Verify request created. Verify request: {:?}", verify_request);
+
     let verify_response = paygate.verify_payment(&verify_request).await?;
+
+    tracing::debug!("Verify response received. Verify response: {:?}", verify_response);
 
     v2::PriceTag::validate_verify_response(verify_response)?;
 
     let settlement = paygate.settle_payment(&verify_request).await?;
 
     let header_value = settlement_to_header(settlement)?;
-
 
     Ok(header_value)
 }

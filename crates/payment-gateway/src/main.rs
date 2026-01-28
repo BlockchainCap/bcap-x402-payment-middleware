@@ -1,5 +1,6 @@
 mod config;
 mod database;
+mod errors;
 mod handlers;
 mod signature_cache;
 mod state;
