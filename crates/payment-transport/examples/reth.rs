@@ -30,8 +30,13 @@ async fn main() {
         .parse()
         .unwrap();
 
+    let url = env::var("NODE_URL")
+        .expect("NODE_URL env variable required")
+        .parse()
+        .unwrap();
+
     // Create a custom transport layer that embeds the micropayments middleware
-    let transport = PaymentTransport::new("http://localhost:3000/relay".parse().unwrap(), signer);
+    let transport = PaymentTransport::new(url, signer);
 
     // Create an EVM provider normally, include the transport layer
     let provider = ProviderBuilder::new().connect_with(&transport).await.unwrap();
